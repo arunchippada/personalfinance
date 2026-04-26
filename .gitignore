@@ -1,0 +1,24 @@
+# Generated data and downloads
+data/
+
+# Local Python environment
+.venv/
+venv/
+env/
+
+# Python build and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter runtime files
+.ipynb_checkpoints/
+
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

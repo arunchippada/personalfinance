@@ -3,9 +3,11 @@ import requests
 import pandas as pd
 
 from datetime import datetime
+from pathlib import Path
 
-data_folder = os.path.join("data", datetime.now().strftime('%Y-%m-%d'))
-fund_count = 12976
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+data_folder = PROJECT_ROOT / "data" / datetime.now().strftime('%Y-%m-%d')
+fund_count = 13132
 page_size = 500
 
 def get_page_count():
