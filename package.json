@@ -1,0 +1,30 @@
+{
+  "name": "personalfinance-portfolio-builder",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "NEXT_TEST_WASM_DIR=./node_modules/@next/swc-wasm-nodejs next dev",
+    "build": "NEXT_TEST_WASM_DIR=./node_modules/@next/swc-wasm-nodejs next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^15.3.1",
+    "papaparse": "^5.4.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "recharts": "^2.15.3"
+  },
+  "devDependencies": {
+    "@next/swc-wasm-nodejs": "^15.5.15",
+    "@types/node": "^22.15.17",
+    "@types/papaparse": "^5.3.15",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3"
+  }
+}
