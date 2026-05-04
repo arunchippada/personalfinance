@@ -6,7 +6,7 @@ import type { FundRecord, FundRole, InferredColumns, PortfolioDataBundle } from 
 const DEFAULT_CSV_PATH = path.join(
   process.cwd(),
   "data",
-  "2026-04-26",
+  "2026-05-03",
   "fidelity_funds_data_cleaned.csv"
 );
 

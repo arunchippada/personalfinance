@@ -17,13 +17,15 @@ Local-only Next.js + TypeScript app for exploring a Fidelity fund universe and a
 
 ## Expected CSV path
 
-By default the app reads:
+By default the app reads the path from `.env.local`:
 
-`/Users/arun/Projects/personalfinance/data/2026-04-26/fidelity_funds_data_cleaned.csv`
+```text
+FIDELITY_CSV_PATH=data/2026-05-03/fidelity_funds_data_cleaned.csv
+```
 
-You can override this at runtime with:
+Use a relative path so the same setting works on Windows and macOS. If `.env.local` is missing, copy `.env.example`.
 
-`FIDELITY_CSV_PATH=/absolute/path/to/file.csv`
+You can still override this at runtime with `FIDELITY_CSV_PATH=/absolute/path/to/file.csv`.
 
 ## How to run locally
 
@@ -35,6 +37,20 @@ pnpm install
 
 2. Start the app:
 
+On macOS/Linux:
+
+```bash
+./scripts/start_dev.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/start_dev.ps1
+```
+
+Or, if your shell already has the needed env vars:
+
 ```bash
 pnpm dev
 ```
@@ -42,6 +58,32 @@ pnpm dev
 3. Open the local URL shown by Next.js, typically:
 
 `http://localhost:3000`
+
+## Refresh Fidelity data
+
+On macOS/Linux:
+
+```bash
+./scripts/run_fidelity_pipeline.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/run_fidelity_pipeline.ps1
+```
+
+The script creates `.venv` if needed, installs the Python ingestion dependencies from `requirements.txt`, downloads the latest Fidelity fund data, and writes the cleaned CSV to:
+
+```text
+data/YYYY-MM-DD/fidelity_funds_data_cleaned.csv
+```
+
+To point the app at the refreshed file, update `.env.local`:
+
+```text
+FIDELITY_CSV_PATH=data/YYYY-MM-DD/fidelity_funds_data_cleaned.csv
+```
 
 ## Project structure
 

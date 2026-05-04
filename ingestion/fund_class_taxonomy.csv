@@ -1,0 +1,20 @@
+Fund Class,Use in Portfolio
+US Large Cap Core,Main US equity anchor
+US Large Cap Growth,Optional growth tilt
+US Large Cap Value,Optional value tilt
+US Mid Cap,US diversification beyond large cap
+US Small Cap,Higher-risk US diversification
+International Developed Large Cap,Main international equity
+International Developed Small/Mid,Optional international diversification
+Emerging Markets Equity,Higher-risk international growth
+Core Bond,Main bond anchor
+Short-Term Bond,Lower-duration stabilizer
+Inflation-Protected Bond / TIPS,Inflation hedge
+High Yield / Credit Bond,Optional riskier income
+Global / International Bond,Optional bond diversification
+Real Estate / REIT,Optional diversifier
+Sector / Thematic Equity,Usually excluded or satellite only
+Allocation / Target Date / Multi-Asset,Usually excluded from custom portfolio
+Alternatives / Trading / Commodities,Usually excluded or advanced only
+Municipal Bonds,Usually exclude for retirement account
+Other,Could not be classified from Morningstar Category

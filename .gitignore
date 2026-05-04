@@ -27,3 +27,6 @@ Thumbs.db
 node_modules/
 .next/
 tsconfig.tsbuildinfo
+
+# Local app environment
+.env*.local
