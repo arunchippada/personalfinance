@@ -38,9 +38,12 @@ Invoke-Native "Running Fidelity pipeline" { & $VenvPython $Pipeline }
 
 $Today = Get-Date -Format "yyyy-MM-dd"
 $CleanedCsv = Join-Path $RepoRoot "data\$Today\fidelity_funds_data_cleaned.csv"
+$EnrichedCsv = Join-Path $RepoRoot "data\$Today\fidelity_funds_data_enriched.csv"
+Invoke-Native "Classifying and scoring Fidelity funds" { & $VenvPython (Join-Path $RepoRoot "ingestion\classify_and_score_funds.py") (Join-Path $RepoRoot "data\$Today") }
 
 Write-Host ""
 Write-Host "Pipeline complete."
 Write-Host "Cleaned CSV: $CleanedCsv"
+Write-Host "Enriched CSV: $EnrichedCsv"
 Write-Host "Update .env.local with:"
-Write-Host "FIDELITY_CSV_PATH=data/$Today/fidelity_funds_data_cleaned.csv"
+Write-Host "FIDELITY_CSV_PATH=data/$Today/fidelity_funds_data_enriched.csv"

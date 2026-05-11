@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import pandas as pd
 
@@ -9,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 data_folder = PROJECT_ROOT / "data" / datetime.now().strftime('%Y-%m-%d')
 fund_count = 13132
 page_size = 500
+max_download_attempts = 3
+retry_delay_seconds = 1
 
 def get_page_count():
 	return (fund_count + page_size - 1) // page_size
@@ -29,14 +32,23 @@ def download_page(url, headers, page_number):
 		"tabNames": "Overview,Risk,ManagementAndFees,MorningstarRankings,IncomeCharacteristics,ShortTermPerformance,DailyPricingAndYields"
 	}
 
-	response = requests.post(url, headers=headers, json=payload)
-	if response.status_code != 200:
-		print(f"Failed to download page {page_number}: {response.status_code}")
-		return
+	for attempt in range(1, max_download_attempts + 1):
+		try:
+			response = requests.post(url, headers=headers, json=payload)
+			if response.status_code == 200:
+				filename = f"{data_folder}/funds_page_{page_number}.xlsx"
+				with open(filename, "wb") as f:
+					f.write(response.content)
+				return
 
-	filename = f"{data_folder}/funds_page_{page_number}.xlsx"
-	with open(filename, "wb") as f:
-		f.write(response.content)
+			print(f"Failed to download page {page_number} on attempt {attempt}: {response.status_code}")
+		except requests.RequestException as exc:
+			print(f"Failed to download page {page_number} on attempt {attempt}: {exc}")
+
+		if attempt < max_download_attempts:
+			time.sleep(retry_delay_seconds)
+
+	print(f"Giving up on page {page_number} after {max_download_attempts} attempts")
 
 def download_data():
 	url = "https://fundresearch.fidelity.com/fund-screener/api/search/v1/funds/xlsx"

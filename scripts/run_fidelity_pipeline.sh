@@ -15,9 +15,14 @@ fi
 "$venv_python" ingestion/run_fidelity_pipeline.py
 
 today="$(date +%F)"
-cleaned_csv="$repo_root/data/$today/fidelity_funds_data_cleaned.csv"
+data_dir="$repo_root/data/$today"
+cleaned_csv="$data_dir/fidelity_funds_data_cleaned.csv"
+enriched_csv="$data_dir/fidelity_funds_data_enriched.csv"
+
+"$venv_python" ingestion/classify_and_score_funds.py "$data_dir"
 
 printf "\nPipeline complete.\n"
 printf "Cleaned CSV: %s\n" "$cleaned_csv"
+printf "Enriched CSV: %s\n" "$enriched_csv"
 printf "Update .env.local with:\n"
-printf "FIDELITY_CSV_PATH=data/%s/fidelity_funds_data_cleaned.csv\n" "$today"
+printf "FIDELITY_CSV_PATH=data/%s/fidelity_funds_data_enriched.csv\n" "$today"
