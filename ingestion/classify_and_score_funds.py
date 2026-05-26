@@ -6,6 +6,30 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 data_folder = PROJECT_ROOT / 'data'
 
+SCORING_CONFIG = {
+    'columns': {
+        'cost': 'Expense Ratio - Net',
+        'return_3y': '3 Yr',
+        'return_5y': '5 Yr',
+        'return_10y': '10 Yr',
+        'risk_adjusted': '3 Year Sharpe Ratio',
+        'volatility': 'Standard Deviation',
+        'risk': 'Morningstar Category Risk',
+    },
+    'weighted_return_weights': {
+        '10 Yr': 0.60,
+        '5 Yr': 0.30,
+        '3 Yr': 0.10,
+    },
+    'global_score_weights': {
+        'cost_score': 0.30,
+        'weighted_return_score': 0.30,
+        'risk_adjusted_score': 0.25,
+        'volatility_score': 0.15,
+    },
+    'score_precision': 2,
+}
+
 CLASS_TAXONOMY = [
     ('US Large Cap Core', 'Main US equity anchor'),
     ('US Large Cap Growth', 'Optional growth tilt'),
@@ -146,6 +170,97 @@ EXACT_CATEGORY_TO_CLASS = {
 
 TAXONOMY_BY_CLASS = dict(CLASS_TAXONOMY)
 
+
+def percentile_score(series, *, higher_is_better, precision):
+    numeric = pd.to_numeric(series, errors='coerce')
+    if not higher_is_better:
+        numeric = -numeric
+    ranked = numeric.rank(method='average', pct=True)
+    return ranked.mul(100).round(precision)
+
+
+def normalized_weighted_average(df, weights):
+    weighted_sum = pd.Series(0.0, index=df.index)
+    available_weight = pd.Series(0.0, index=df.index)
+
+    for col_name, weight in weights.items():
+        values = pd.to_numeric(df[col_name], errors='coerce')
+        present = values.notna()
+        weighted_sum = weighted_sum.add(values.fillna(0) * weight, fill_value=0)
+        available_weight = available_weight.add(present.astype(float) * weight, fill_value=0)
+
+    return weighted_sum.div(available_weight.where(available_weight > 0))
+
+
+def add_scoring_columns(df):
+    columns = SCORING_CONFIG['columns']
+    precision = SCORING_CONFIG['score_precision']
+
+    for column_name in columns.values():
+        if column_name in df.columns:
+            df[column_name] = pd.to_numeric(df[column_name], errors='coerce')
+
+    df['cost_score'] = percentile_score(
+        df[columns['cost']],
+        higher_is_better=False,
+        precision=precision,
+    )
+
+    df['weighted_return'] = normalized_weighted_average(df, SCORING_CONFIG['weighted_return_weights'])
+    df['weighted_return_score'] = percentile_score(
+        df['weighted_return'],
+        higher_is_better=True,
+        precision=precision,
+    )
+
+    df['risk_adjusted_score'] = percentile_score(
+        df[columns['risk_adjusted']],
+        higher_is_better=True,
+        precision=precision,
+    )
+    df['volatility_score'] = percentile_score(
+        df[columns['volatility']],
+        higher_is_better=False,
+        precision=precision,
+    )
+    df['risk_score'] = percentile_score(
+        df[columns['risk']],
+        higher_is_better=False,
+        precision=precision,
+    )
+
+    df['global_score'] = normalized_weighted_average(df, SCORING_CONFIG['global_score_weights']).round(precision)
+    df['global_percentile'] = percentile_score(
+        df['global_score'],
+        higher_is_better=True,
+        precision=precision,
+    )
+    df['role_percentile'] = (
+        df.groupby('Fund Class', dropna=False)['global_score']
+        .transform(
+            lambda series: percentile_score(
+                series,
+                higher_is_better=True,
+                precision=precision,
+            )
+        )
+    )
+
+    return df
+
+
+def summarize_missing_values(df):
+    columns = SCORING_CONFIG['columns']
+    return {
+        'expense_ratio': int(pd.to_numeric(df[columns['cost']], errors='coerce').isna().sum()),
+        'return_3y': int(pd.to_numeric(df[columns['return_3y']], errors='coerce').isna().sum()),
+        'return_5y': int(pd.to_numeric(df[columns['return_5y']], errors='coerce').isna().sum()),
+        'return_10y': int(pd.to_numeric(df[columns['return_10y']], errors='coerce').isna().sum()),
+        'sharpe_3y': int(pd.to_numeric(df[columns['risk_adjusted']], errors='coerce').isna().sum()),
+        'standard_deviation': int(pd.to_numeric(df[columns['volatility']], errors='coerce').isna().sum()),
+        'morningstar_category_risk': int(pd.to_numeric(df[columns['risk']], errors='coerce').isna().sum()),
+    }
+
 def classify_morningstar_category(category):
     if pd.isna(category):
         return 'Other'
@@ -181,6 +296,12 @@ def classify_and_score_funds(folder=data_folder):
     df = pd.read_csv(input_file)
     df['Fund Class'] = df['Morningstar Category'].apply(classify_morningstar_category)
     df['Fund Class Use'] = df['Fund Class'].map(TAXONOMY_BY_CLASS)
+    missing_summary = summarize_missing_values(df)
+    df = add_scoring_columns(df)
+    funds_scored = int(df['global_score'].notna().sum())
+
+    if 'weighted_return' in df.columns:
+        df = df.drop(columns=['weighted_return'])
 
     df.to_csv(enriched_file, index=False)
 
@@ -196,6 +317,10 @@ def classify_and_score_funds(folder=data_folder):
 
     print('Classification summary')
     print(f'Total input rows: {len(df)}')
+    print(f'Funds scored: {funds_scored}')
+    print('Missing values in scoring inputs:')
+    for feature_name, missing_count in missing_summary.items():
+        print(f'- {feature_name}: {missing_count}')
     print(f'Enriched data written to {enriched_file}')
     print(f'Classification results written to {results_file}')
     print(f'Class taxonomy written to {taxonomy_file}')
