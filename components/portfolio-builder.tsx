@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useMemo, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -12,423 +12,753 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { buildPortfolioRecommendations } from "@/lib/portfolio-engine";
-import type { BuilderConstraints, FundRecord, PortfolioRecommendation, ScoredFund } from "@/lib/types";
+import type {
+  BaseRankField,
+  FundType,
+  Portfolio,
+  RankedFund,
+  TopByRoleRequest,
+  TopByRoleResponse,
+  TopFundsByRoleResult
+} from "@/lib/types";
 
-const ROLE_COLORS: Record<string, string> = {
-  "US Large Cap": "#1d4ed8",
-  "US Extended Market / Mid-Small Cap": "#2563eb",
-  "International Developed Equity": "#0f766e",
-  "Emerging Markets Equity": "#14b8a6",
-  "Sector / Thematic Equity": "#f59e0b",
-  "Core Bond": "#6366f1",
-  "Short-Term Bond": "#8b5cf6",
-  "TIPS / Inflation-Protected Bond": "#a855f7",
-  "Other / Excluded": "#94a3b8"
+type FundTypeMode = "both" | FundType;
+type SortKey =
+  | "rank"
+  | "ticker"
+  | "name"
+  | "rolePercentile"
+  | "globalPercentile"
+  | "adjustedScore"
+  | "expenseRatio"
+  | "return3Y"
+  | "return5Y"
+  | "return10Y"
+  | "standardDeviation"
+  | "ntf"
+  | "load"
+  | "morningstarRisk"
+  | "costScore"
+  | "weightedReturnScore"
+  | "riskAdjustedScore"
+  | "volatilityScore";
+
+const ROLE_COLORS = [
+  "#0f766e",
+  "#1d4ed8",
+  "#b45309",
+  "#7c3aed",
+  "#0f172a",
+  "#be123c",
+  "#0891b2",
+  "#65a30d",
+  "#ea580c"
+];
+
+const DEFAULT_CONTROLS = {
+  limitPerRole: 20,
+  fundTypeMode: "both" as FundTypeMode,
+  maxExpenseRatio: "",
+  etfBonus: 0,
+  noTransactionFeeBonus: 3,
+  baseRank: "role_percentile" as BaseRankField
 };
 
-const DEFAULT_CONSTRAINTS: BuilderConstraints = {
-  stockAllocation: 60,
-  fundTarget: 6,
-  maxExpenseRatio: 1,
-  excludeSectorThematic: true,
-  lowCostPriority: true
-};
-
-function formatPercent(value?: number, digits = 2) {
-  return value === undefined ? "N/A" : `${value.toFixed(digits)}%`;
+function formatPercent(value: number | null | undefined, digits = 2) {
+  return value === null || value === undefined ? "N/A" : `${value.toFixed(digits)}%`;
 }
 
-function formatRole(role: string) {
-  return role.replace(" / ", " /\n");
+function formatScore(value: number | null | undefined, digits = 2) {
+  return value === null || value === undefined ? "N/A" : value.toFixed(digits);
 }
 
-function MetricRow({ label, value }: { label: string; value: string }) {
+function formatFlag(value: boolean | undefined) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "N/A";
+}
+
+function getRoleColor(index: number) {
+  return ROLE_COLORS[index % ROLE_COLORS.length];
+}
+
+function toRequest(controls: typeof DEFAULT_CONTROLS): TopByRoleRequest {
+  const fundTypes =
+    controls.fundTypeMode === "both"
+      ? (["ETF", "Mutual Fund"] as FundType[])
+      : ([controls.fundTypeMode] as FundType[]);
+
+  return {
+    limitPerRole: controls.limitPerRole,
+    filters: {
+      fundTypes,
+      maxExpenseRatio: controls.maxExpenseRatio === "" ? undefined : Number(controls.maxExpenseRatio)
+    },
+    rankingOptions: {
+      baseRank: controls.baseRank,
+      etfBonus: controls.etfBonus,
+      noTransactionFeeBonus: controls.noTransactionFeeBonus,
+      noLoadBonus: 1.5,
+      lowExpenseExtraWeight: 2
+    }
+  };
+}
+
+function metricValue(fund: RankedFund, key: SortKey) {
+  switch (key) {
+    case "rank":
+      return fund.rank;
+    case "ticker":
+      return fund.ticker;
+    case "name":
+      return fund.name;
+    case "rolePercentile":
+      return fund.baseRolePercentile ?? -Infinity;
+    case "globalPercentile":
+      return fund.globalPercentile ?? -Infinity;
+    case "adjustedScore":
+      return fund.adjustedScore;
+    case "expenseRatio":
+      return fund.netExpenseRatio ?? Infinity;
+    case "return3Y":
+      return fund.returns["3Y"] ?? -Infinity;
+    case "return5Y":
+      return fund.returns["5Y"] ?? -Infinity;
+    case "return10Y":
+      return fund.returns["10Y"] ?? -Infinity;
+    case "standardDeviation":
+      return fund.standardDeviation ?? Infinity;
+    case "ntf":
+      return fund.ntf ? 1 : 0;
+    case "load":
+      return fund.load ? 1 : 0;
+    case "morningstarRisk":
+      return fund.morningstarRisk ?? Infinity;
+    case "costScore":
+      return fund.costScore ?? -Infinity;
+    case "weightedReturnScore":
+      return fund.weightedReturnScore ?? -Infinity;
+    case "riskAdjustedScore":
+      return fund.riskAdjustedScore ?? -Infinity;
+    case "volatilityScore":
+      return fund.volatilityScore ?? -Infinity;
+  }
+}
+
+function sortFunds(funds: RankedFund[], sortKey: SortKey, direction: "asc" | "desc") {
+  return [...funds].sort((a, b) => {
+    const left = metricValue(a, sortKey);
+    const right = metricValue(b, sortKey);
+
+    if (typeof left === "string" && typeof right === "string") {
+      return direction === "asc" ? left.localeCompare(right) : right.localeCompare(left);
+    }
+
+    const leftNumber = typeof left === "number" ? left : 0;
+    const rightNumber = typeof right === "number" ? right : 0;
+    return direction === "asc" ? leftNumber - rightNumber : rightNumber - leftNumber;
+  });
+}
+
+function SortButton({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onChange,
+  className
+}: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  direction: "asc" | "desc";
+  onChange: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = sortKey === activeKey;
+
   return (
-    <div className="metric-chip rounded-2xl px-3 py-2">
-      <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
-      <div className="mt-1 text-sm font-semibold text-slate-900">{value}</div>
+    <button
+      className={`inline-flex items-center gap-1 text-left text-xs uppercase tracking-[0.12em] text-slate-500 ${className ?? ""}`}
+      onClick={() => onChange(sortKey)}
+      type="button"
+    >
+      <span>{label}</span>
+      <span className={active ? "text-slate-900" : "text-slate-300"}>{active ? (direction === "asc" ? "↑" : "↓") : "↕"}</span>
+    </button>
+  );
+}
+
+function RoleTable({
+  roleResult,
+  sortKey,
+  direction,
+  onSortChange
+}: {
+  roleResult: TopFundsByRoleResult;
+  sortKey: SortKey;
+  direction: "asc" | "desc";
+  onSortChange: (key: SortKey) => void;
+}) {
+  const sortedFunds = useMemo(
+    () => sortFunds(roleResult.funds, sortKey, direction),
+    [direction, roleResult.funds, sortKey]
+  );
+
+  return (
+    <div className="rounded-[28px] border border-slate-200/80 bg-white/80 p-4 shadow-[0_20px_40px_rgba(15,23,42,0.06)]">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="section-title">Top Funds By Role</div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-950">{roleResult.role}</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Showing {roleResult.funds.length} of {roleResult.totalEligibleInRole} eligible funds in this class.
+          </p>
+        </div>
+        <div className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
+          {roleResult.totalInRole} total in universe
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="min-w-[1400px] text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 text-left">
+              <th className="pb-3 pr-4"><SortButton label="Rank" sortKey="rank" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Ticker" sortKey="ticker" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Name" sortKey="name" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Role %" sortKey="rolePercentile" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Global %" sortKey="globalPercentile" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Adjusted" sortKey="adjustedScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Expense" sortKey="expenseRatio" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="3Y" sortKey="return3Y" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="5Y" sortKey="return5Y" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="10Y" sortKey="return10Y" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Std Dev" sortKey="standardDeviation" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="NTF" sortKey="ntf" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Load" sortKey="load" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Mstar Risk" sortKey="morningstarRisk" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Cost" sortKey="costScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Return Score" sortKey="weightedReturnScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Risk Adj" sortKey="riskAdjustedScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Volatility" sortKey="volatilityScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3">Why It Ranks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedFunds.map((fund) => (
+              <tr key={fund.id} className="border-b border-slate-100 align-top last:border-b-0">
+                <td className="py-3 pr-4 font-semibold text-slate-900">{fund.rank}</td>
+                <td className="py-3 pr-4 font-semibold text-slate-900">{fund.ticker}</td>
+                <td className="py-3 pr-4 min-w-[280px] text-slate-700">{fund.name}</td>
+                <td className="py-3 pr-4">{formatScore(fund.baseRolePercentile)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.globalPercentile)}</td>
+                <td className="py-3 pr-4 font-semibold text-slate-900">{formatScore(fund.adjustedScore)}</td>
+                <td className="py-3 pr-4">{formatPercent(fund.netExpenseRatio)}</td>
+                <td className="py-3 pr-4">{formatPercent(fund.returns["3Y"])}</td>
+                <td className="py-3 pr-4">{formatPercent(fund.returns["5Y"])}</td>
+                <td className="py-3 pr-4">{formatPercent(fund.returns["10Y"])}</td>
+                <td className="py-3 pr-4">{formatPercent(fund.standardDeviation)}</td>
+                <td className="py-3 pr-4">{formatFlag(fund.ntf)}</td>
+                <td className="py-3 pr-4">{formatFlag(fund.load)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.morningstarRisk)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.costScore)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.weightedReturnScore)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.riskAdjustedScore)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.volatilityScore)}</td>
+                <td className="py-3 min-w-[260px] text-slate-600">
+                  {fund.reasons.length > 0 ? fund.reasons.join(" • ") : "No notable flags"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-function PortfolioCard({ portfolio, active, onSelect }: { portfolio: PortfolioRecommendation; active: boolean; onSelect: () => void }) {
+function PortfolioCard({
+  portfolio,
+  selected,
+  onSelect
+}: {
+  portfolio: Portfolio;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
     <button
-      className={`glass-panel rounded-[28px] p-5 text-left transition duration-200 ${
-        active ? "border-blue-400 shadow-[0_24px_64px_rgba(29,78,216,0.2)]" : "hover:-translate-y-0.5"
+      className={`rounded-[28px] border p-5 text-left transition ${
+        selected
+          ? "border-slate-900 bg-slate-900 text-white shadow-[0_24px_60px_rgba(15,23,42,0.22)]"
+          : "border-slate-200 bg-white/84 text-slate-900 hover:-translate-y-0.5"
       }`}
       onClick={onSelect}
       type="button"
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="section-title">{portfolio.name}</div>
-          <h2 className="mt-2 text-xl font-semibold">{portfolio.description}</h2>
+          <div className={`section-title ${selected ? "text-slate-300" : ""}`}>Portfolio Template</div>
+          <h3 className="mt-2 text-xl font-semibold">{portfolio.name}</h3>
         </div>
-        <div className="rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white">
-          {portfolio.selectedFunds.length} funds
+        <div className={`rounded-full px-3 py-1 text-xs font-semibold ${selected ? "bg-white/20" : "bg-slate-100"}`}>
+          {portfolio.holdings.length} holdings
         </div>
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-3">
-        <MetricRow label="Stock / Bond" value={`${portfolio.stockAllocation}% / ${portfolio.bondAllocation}%`} />
-        <MetricRow label="Weighted Fee" value={formatPercent(portfolio.weightedMetrics.expenseRatio)} />
-        <MetricRow label="Weighted 5Y" value={formatPercent(portfolio.weightedMetrics.return5Y)} />
-        <MetricRow label="Risk" value={formatPercent(portfolio.weightedMetrics.standardDeviation)} />
-      </div>
-
-      <div className="mt-5 space-y-2">
-        {portfolio.selectedFunds.map((selection) => (
-          <div key={`${portfolio.key}-${selection.role}-${selection.fund.id}`} className="flex items-center justify-between gap-3 rounded-2xl bg-white/70 px-3 py-2">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">
-                {selection.fund.ticker} <span className="font-normal text-slate-600">{selection.fund.name}</span>
-              </div>
-              <div className="text-xs text-slate-500">{selection.role}</div>
-            </div>
-            <div className="text-sm font-semibold text-slate-900">{selection.allocation}%</div>
-          </div>
-        ))}
+        <div className={`rounded-2xl px-3 py-3 ${selected ? "bg-white/10" : "bg-slate-50"}`}>
+          <div className={`text-[11px] uppercase tracking-[0.14em] ${selected ? "text-slate-300" : "text-slate-500"}`}>Portfolio Score</div>
+          <div className="mt-1 text-lg font-semibold">{formatScore(portfolio.metrics.portfolioScore)}</div>
+        </div>
+        <div className={`rounded-2xl px-3 py-3 ${selected ? "bg-white/10" : "bg-slate-50"}`}>
+          <div className={`text-[11px] uppercase tracking-[0.14em] ${selected ? "text-slate-300" : "text-slate-500"}`}>Weighted Expense</div>
+          <div className="mt-1 text-lg font-semibold">{formatPercent(portfolio.metrics.weightedExpenseRatio)}</div>
+        </div>
       </div>
     </button>
   );
 }
 
-function RoleCandidateTable({ rankedCandidates }: { rankedCandidates: Record<string, ScoredFund[]> }) {
-  const entries = Object.entries(rankedCandidates).filter(
-    ([role, funds]) => role !== "Other / Excluded" && funds.length > 0
-  );
+export function PortfolioBuilder() {
+  const [controls, setControls] = useState(DEFAULT_CONTROLS);
+  const deferredControls = useDeferredValue(controls);
+  const [data, setData] = useState<TopByRoleResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+  const [selectedPortfolioKey, setSelectedPortfolioKey] = useState<Portfolio["key"]>("5-fund");
+  const [sortKey, setSortKey] = useState<SortKey>("adjustedScore");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
-  return (
-    <div className="space-y-5">
-      {entries.map(([role, funds]) => (
-        <div key={role} className="glass-panel rounded-[24px] p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="section-title">Top Candidates</div>
-              <h3 className="mt-1 text-lg font-semibold">{role}</h3>
-            </div>
-            <div className="rounded-full px-3 py-1 text-xs font-semibold text-slate-600" style={{ backgroundColor: `${ROLE_COLORS[role]}20` }}>
-              {funds.length} eligible
-            </div>
-          </div>
+  const requestBody = useMemo(() => toRequest(deferredControls), [deferredControls]);
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-xs uppercase tracking-[0.14em] text-slate-500">
-                <tr>
-                  <th className="pb-2 pr-4">Fund</th>
-                  <th className="pb-2 pr-4">Score</th>
-                  <th className="pb-2 pr-4">Expense</th>
-                  <th className="pb-2 pr-4">5Y</th>
-                  <th className="pb-2 pr-4">Risk</th>
-                  <th className="pb-2">Top Reasons</th>
-                </tr>
-              </thead>
-              <tbody>
-                {funds.slice(0, 5).map((fund) => (
-                  <tr key={fund.id} className="border-t border-slate-200/70 align-top">
-                    <td className="py-3 pr-4">
-                      <div className="font-semibold">{fund.ticker}</div>
-                      <div className="max-w-sm text-slate-600">{fund.name}</div>
-                    </td>
-                    <td className="py-3 pr-4 font-semibold">{fund.score.toFixed(1)}</td>
-                    <td className="py-3 pr-4">{formatPercent(fund.expenseRatio)}</td>
-                    <td className="py-3 pr-4">{formatPercent(fund.returns["5Y"])}</td>
-                    <td className="py-3 pr-4">{formatPercent(fund.standardDeviation)}</td>
-                    <td className="py-3">
-                      <div className="space-y-1 text-slate-600">
-                        {fund.selectionReasons.slice(0, 2).map((reason) => (
-                          <div key={reason}>• {reason}</div>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+  useEffect(() => {
+    const controller = new AbortController();
 
-export function PortfolioBuilder({
-  funds,
-  warnings,
-  rowCount,
-  csvPath
-}: {
-  funds: FundRecord[];
-  warnings: string[];
-  rowCount: number;
-  csvPath: string;
-}) {
-  const [constraints, setConstraints] = useState<BuilderConstraints>(DEFAULT_CONSTRAINTS);
-  const [selectedPortfolioKey, setSelectedPortfolioKey] = useState<PortfolioRecommendation["key"]>("balanced");
-  const deferredConstraints = useDeferredValue(constraints);
+    async function fetchFunds() {
+      setLoading(true);
+      setError(null);
 
-  const { recommendations, rankedCandidates } = useMemo(
-    () => buildPortfolioRecommendations(funds, deferredConstraints),
-    [funds, deferredConstraints]
-  );
+      try {
+        const response = await fetch("/api/funds/top-by-role", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
 
-  const selectedPortfolio =
-    recommendations.find((portfolio) => portfolio.key === selectedPortfolioKey) ?? recommendations[1];
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Request failed.");
+        }
 
-  const allocationChartData = selectedPortfolio?.selectedFunds.map((selection) => ({
-    name: selection.fund.ticker,
-    value: selection.allocation,
-    role: selection.role
-  })) ?? [];
+        setData(payload as TopByRoleResponse);
+      } catch (fetchError) {
+        if (controller.signal.aborted) return;
+        setError(fetchError instanceof Error ? fetchError.message : "Unable to load funds.");
+        setData(null);
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
 
-  const roleChartData = selectedPortfolio?.roleAllocation ?? [];
+    fetchFunds();
+    return () => controller.abort();
+  }, [requestBody]);
+
+  useEffect(() => {
+    if (!data) return;
+    const available = data.roles.map((role) => role.role);
+    if (!selectedRole || !available.includes(selectedRole)) {
+      setSelectedRole(available[0] ?? null);
+    }
+  }, [data, selectedRole]);
+
+  useEffect(() => {
+    if (!data) return;
+    const availableKeys = data.portfolios.map((portfolio) => portfolio.key);
+    if (!availableKeys.includes(selectedPortfolioKey)) {
+      setSelectedPortfolioKey(data.portfolios[0]?.key ?? "5-fund");
+    }
+  }, [data, selectedPortfolioKey]);
+
+  const activeRole = data?.roles.find((role) => role.role === selectedRole) ?? data?.roles[0] ?? null;
+  const activePortfolio =
+    data?.portfolios.find((portfolio) => portfolio.key === selectedPortfolioKey) ?? data?.portfolios[0] ?? null;
+
+  const roleChartData =
+    activePortfolio?.allocationByRole.map((item, index) => ({
+      ...item,
+      color: getRoleColor(index)
+    })) ?? [];
+
+  const fundChartData =
+    activePortfolio?.allocationByFund.map((item, index) => ({
+      ...item,
+      color: getRoleColor(index)
+    })) ?? [];
+
+  function updateControl<K extends keyof typeof DEFAULT_CONTROLS>(key: K, value: (typeof DEFAULT_CONTROLS)[K]) {
+    startTransition(() => {
+      setControls((current) => ({
+        ...current,
+        [key]: value
+      }));
+    });
+  }
+
+  function handleSortChange(key: SortKey) {
+    if (sortKey === key) {
+      setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+
+    setSortKey(key);
+    setSortDirection(key === "name" || key === "ticker" ? "asc" : "desc");
+  }
 
   return (
     <main className="min-h-screen px-4 py-6 md:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1680px]">
-        <div className="glass-panel rounded-[32px] p-6 md:p-8">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+      <div className="mx-auto max-w-[1720px]">
+        <section className="hero-panel rounded-[36px] p-6 md:p-8">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
             <div>
-              <div className="section-title">Local Fidelity Portfolio Builder</div>
-              <h1 className="mt-2 max-w-4xl text-3xl font-semibold leading-tight md:text-5xl">
-                Deterministic portfolio construction from your local Fidelity fund universe.
+              <div className="section-title text-emerald-800">Fund Portfolio Builder</div>
+              <h1 className="mt-2 max-w-4xl text-4xl font-semibold leading-tight text-slate-950 md:text-5xl">
+                Top funds by role, plus deterministic 5-fund, 7-fund, and 9-fund model portfolios.
               </h1>
-              <p className="mt-3 max-w-3xl text-sm text-slate-600 md:text-base">
-                This app ranks eligible funds by portfolio role, assembles simple model portfolios, and explains the tradeoffs without using external APIs or optimization black boxes.
+              <p className="mt-3 max-w-3xl text-sm text-slate-700 md:text-base">
+                Rankings come from your local enriched CSV. The app applies simple runtime filters and bonuses, then builds fixed-template portfolios with fully inspectable logic.
               </p>
             </div>
-            <div className="rounded-[24px] bg-white/75 px-4 py-3 text-sm text-slate-600">
-              <div><span className="font-semibold text-slate-900">{rowCount.toLocaleString()}</span> parsed funds</div>
-              <div className="truncate">CSV: {csvPath}</div>
-            </div>
-          </div>
-
-          {warnings.length > 0 && (
-            <div className="mt-5 rounded-[24px] border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <div className="font-semibold">Data warnings</div>
-              <div className="mt-2 space-y-1">
-                {warnings.map((warning) => (
-                  <div key={warning}>• {warning}</div>
-                ))}
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="summary-card">
+                <div className="summary-label">Universe</div>
+                <div className="summary-value">{data?.summary.totalFunds.toLocaleString() ?? "—"}</div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">Eligible</div>
+                <div className="summary-value">{data?.summary.totalFilteredFunds.toLocaleString() ?? "—"}</div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">CSV</div>
+                <div className="truncate text-sm font-medium text-slate-700">
+                  {data ? data.summary.dataFile.split("/").slice(-2).join("/") : "Loading"}
+                </div>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        </section>
 
-        <div className="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-          <aside className="glass-panel rounded-[28px] p-5 h-fit">
-            <div className="section-title">Constraints</div>
-            <div className="mt-4 space-y-5">
-              <label className="block">
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span>Stock allocation</span>
-                  <span>{constraints.stockAllocation}%</span>
-                </div>
-                <input
-                  className="mt-2 w-full"
-                  type="range"
-                  min={20}
-                  max={90}
-                  step={5}
-                  value={constraints.stockAllocation}
-                  onChange={(event) =>
-                    setConstraints((current) => ({
-                      ...current,
-                      stockAllocation: Number(event.target.value)
-                    }))
-                  }
-                />
-                <div className="mt-1 text-xs text-slate-500">Bond allocation auto-derives to {100 - constraints.stockAllocation}%.</div>
-              </label>
+        <div className="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="glass-panel h-fit rounded-[30px] p-5">
+            <div className="section-title">Controls</div>
 
+            <div className="mt-5 space-y-5">
               <label className="block">
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span>Target fund count</span>
-                  <span>{constraints.fundTarget}</span>
-                </div>
+                <div className="mb-2 text-sm font-medium text-slate-800">Limit per role</div>
                 <input
-                  className="mt-2 w-full"
-                  type="range"
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  max={50}
                   min={5}
-                  max={8}
                   step={1}
-                  value={constraints.fundTarget}
-                  onChange={(event) =>
-                    setConstraints((current) => ({
-                      ...current,
-                      fundTarget: Number(event.target.value)
-                    }))
-                  }
+                  type="number"
+                  value={controls.limitPerRole}
+                  onChange={(event) => updateControl("limitPerRole", Number(event.target.value))}
                 />
-                <div className="mt-1 text-xs text-slate-500">Simple and granular portfolios adjust around this target.</div>
               </label>
 
               <label className="block">
-                <div className="text-sm font-medium">Max expense ratio (%)</div>
+                <div className="mb-2 text-sm font-medium text-slate-800">Fund type filter</div>
+                <select
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  value={controls.fundTypeMode}
+                  onChange={(event) => updateControl("fundTypeMode", event.target.value as FundTypeMode)}
+                >
+                  <option value="both">Both</option>
+                  <option value="ETF">ETF only</option>
+                  <option value="Mutual Fund">Mutual fund only</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-slate-800">Max expense ratio (%)</div>
                 <input
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
-                  min={0.05}
-                  max={2.5}
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  placeholder="No limit"
                   step={0.05}
                   type="number"
-                  value={constraints.maxExpenseRatio}
-                  onChange={(event) =>
-                    setConstraints((current) => ({
-                      ...current,
-                      maxExpenseRatio: Number(event.target.value)
-                    }))
-                  }
+                  value={controls.maxExpenseRatio}
+                  onChange={(event) => updateControl("maxExpenseRatio", event.target.value)}
                 />
               </label>
 
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-white/70 px-3 py-3">
-                <div>
-                  <div className="text-sm font-medium">Exclude sector / thematic</div>
-                  <div className="text-xs text-slate-500">Avoid concentrated equity sleeves by default.</div>
-                </div>
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-slate-800">ETF bonus</div>
                 <input
-                  checked={constraints.excludeSectorThematic}
-                  onChange={(event) =>
-                    setConstraints((current) => ({
-                      ...current,
-                      excludeSectorThematic: event.target.checked
-                    }))
-                  }
-                  type="checkbox"
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  step={0.5}
+                  type="number"
+                  value={controls.etfBonus}
+                  onChange={(event) => updateControl("etfBonus", Number(event.target.value))}
                 />
               </label>
 
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-white/70 px-3 py-3">
-                <div>
-                  <div className="text-sm font-medium">Low-cost priority</div>
-                  <div className="text-xs text-slate-500">Increase the scoring weight on expense ratio.</div>
-                </div>
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-slate-800">No-transaction-fee bonus</div>
                 <input
-                  checked={constraints.lowCostPriority}
-                  onChange={(event) =>
-                    setConstraints((current) => ({
-                      ...current,
-                      lowCostPriority: event.target.checked
-                    }))
-                  }
-                  type="checkbox"
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  step={0.5}
+                  type="number"
+                  value={controls.noTransactionFeeBonus}
+                  onChange={(event) => updateControl("noTransactionFeeBonus", Number(event.target.value))}
                 />
+              </label>
+
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-slate-800">Base ranking</div>
+                <select
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  value={controls.baseRank}
+                  onChange={(event) => updateControl("baseRank", event.target.value as BaseRankField)}
+                >
+                  <option value="role_percentile">Role percentile</option>
+                  <option value="global_percentile">Global percentile</option>
+                  <option value="global_score">Global score</option>
+                </select>
               </label>
             </div>
+
+            <div className="mt-6 rounded-[24px] bg-white/70 p-4 text-sm text-slate-600">
+              <div className="font-semibold text-slate-900">Runtime ranking formula</div>
+              <p className="mt-2">
+                Adjusted score = selected base rank + ETF bonus + NTF bonus + no-load bonus - expense penalty.
+              </p>
+            </div>
+
+            {data && (
+              <div className="mt-6 rounded-[24px] bg-white/70 p-4">
+                <div className="font-semibold text-slate-900">Fund classes in universe</div>
+                <div className="mt-3 space-y-2 text-sm text-slate-600">
+                  {Object.entries(data.summary.countsByFundClass)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 8)
+                    .map(([role, count]) => (
+                      <div key={role} className="flex items-center justify-between gap-3">
+                        <span className="truncate">{role}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{count}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
           </aside>
 
           <section className="space-y-6">
-            <div className="grid gap-5 xl:grid-cols-3">
-              {recommendations.map((portfolio) => (
-                <PortfolioCard
-                  key={portfolio.key}
-                  portfolio={portfolio}
-                  active={portfolio.key === selectedPortfolio?.key}
-                  onSelect={() => setSelectedPortfolioKey(portfolio.key)}
-                />
-              ))}
-            </div>
-
-            {selectedPortfolio && (
-              <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-                <div className="glass-panel rounded-[28px] p-5">
-                  <div className="section-title">Allocation View</div>
-                  <div className="mt-3 grid gap-5 lg:grid-cols-2">
-                    <div className="h-72 rounded-[24px] bg-white/60 p-2">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie data={allocationChartData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={98} paddingAngle={2}>
-                            {allocationChartData.map((entry) => (
-                              <Cell key={entry.name} fill={ROLE_COLORS[entry.role]} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value: number) => `${value}%`} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <div className="h-72 rounded-[24px] bg-white/60 p-2">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={roleChartData}>
-                          <XAxis dataKey="role" tickFormatter={formatRole} interval={0} fontSize={11} />
-                          <YAxis unit="%" fontSize={11} />
-                          <Tooltip formatter={(value: number) => `${value}%`} />
-                          <Bar dataKey="allocation" radius={[12, 12, 0, 0]}>
-                            {roleChartData.map((entry) => (
-                              <Cell key={entry.role} fill={ROLE_COLORS[entry.role]} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="glass-panel rounded-[28px] p-5">
-                  <div className="section-title">Weighted Metrics</div>
-                  <div className="mt-4 grid grid-cols-2 gap-3">
-                    <MetricRow label="Weighted Expense" value={formatPercent(selectedPortfolio.weightedMetrics.expenseRatio)} />
-                    <MetricRow label="Weighted 1Y" value={formatPercent(selectedPortfolio.weightedMetrics.return1Y)} />
-                    <MetricRow label="Weighted 3Y" value={formatPercent(selectedPortfolio.weightedMetrics.return3Y)} />
-                    <MetricRow label="Weighted 5Y" value={formatPercent(selectedPortfolio.weightedMetrics.return5Y)} />
-                    <MetricRow label="Weighted 10Y" value={formatPercent(selectedPortfolio.weightedMetrics.return10Y)} />
-                    <MetricRow label="Weighted Std Dev" value={formatPercent(selectedPortfolio.weightedMetrics.standardDeviation)} />
-                  </div>
-
-                  <div className="mt-5 rounded-[24px] bg-white/70 p-4">
-                    <div className="font-semibold">Risk summary</div>
-                    <p className="mt-2 text-sm text-slate-600">{selectedPortfolio.riskSummary}</p>
-                  </div>
-                </div>
+            {loading && (
+              <div className="glass-panel rounded-[30px] p-10 text-center">
+                <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
+                <p className="mt-4 text-sm text-slate-600">Loading and ranking the local fund universe…</p>
               </div>
             )}
 
-            <RoleCandidateTable rankedCandidates={rankedCandidates} />
-          </section>
+            {!loading && error && (
+              <div className="rounded-[30px] border border-rose-200 bg-rose-50 p-6 text-rose-900">
+                <div className="text-lg font-semibold">Unable to load fund rankings</div>
+                <p className="mt-2 text-sm">{error}</p>
+              </div>
+            )}
 
-          <aside className="space-y-6">
-            {selectedPortfolio && (
+            {!loading && !error && data && data.roles.length === 0 && (
+              <div className="glass-panel rounded-[30px] p-10 text-center">
+                <div className="text-xl font-semibold text-slate-900">No funds match the current filters.</div>
+                <p className="mt-2 text-sm text-slate-600">Try widening the expense ratio cap or switching fund type back to both.</p>
+              </div>
+            )}
+
+            {!loading && !error && data && data.roles.length > 0 && (
               <>
-                <div className="glass-panel rounded-[28px] p-5">
-                  <div className="section-title">Why This Portfolio?</div>
-                  <div className="mt-4 space-y-4">
-                    {selectedPortfolio.selectedFunds.map((selection) => (
-                      <div key={`${selection.role}-${selection.fund.id}`} className="rounded-[24px] bg-white/72 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm text-slate-500">{selection.role}</div>
-                            <div className="text-base font-semibold">
-                              {selection.fund.name} ({selection.fund.ticker})
+                <div className="rounded-[30px] border border-slate-200 bg-white/84 p-5">
+                  <div className="section-title">Roles</div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {data.roles.map((roleResult, index) => (
+                      <button
+                        key={roleResult.role}
+                        className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
+                          roleResult.role === activeRole?.role
+                            ? "border-slate-900 bg-slate-900 text-white"
+                            : "border-slate-200 bg-white text-slate-700"
+                        }`}
+                        onClick={() => setSelectedRole(roleResult.role)}
+                        type="button"
+                      >
+                        <span
+                          className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle"
+                          style={{ backgroundColor: getRoleColor(index) }}
+                        />
+                        {roleResult.role}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {activeRole && (
+                  <RoleTable
+                    direction={sortDirection}
+                    onSortChange={handleSortChange}
+                    roleResult={activeRole}
+                    sortKey={sortKey}
+                  />
+                )}
+
+                <div className="rounded-[30px] border border-slate-200 bg-white/84 p-5">
+                  <div className="section-title">Portfolios</div>
+                  <div className="mt-4 grid gap-4 xl:grid-cols-3">
+                    {data.portfolios.map((portfolio) => (
+                      <PortfolioCard
+                        key={portfolio.key}
+                        portfolio={portfolio}
+                        selected={portfolio.key === activePortfolio?.key}
+                        onSelect={() => setSelectedPortfolioKey(portfolio.key)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {activePortfolio && (
+                  <div className="grid gap-6 2xl:grid-cols-[1.05fr_0.95fr]">
+                    <div className="space-y-6">
+                      <div className="glass-panel rounded-[30px] p-5">
+                        <div className="section-title">Portfolio Holdings</div>
+                        <div className="mt-4 space-y-3">
+                          {activePortfolio.holdings.map((holding) => (
+                            <div key={`${activePortfolio.key}-${holding.requestedRole}-${holding.fund.id}`} className="rounded-[24px] bg-white/75 p-4">
+                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div>
+                                  <div className="text-xs uppercase tracking-[0.14em] text-slate-500">{holding.requestedRole}</div>
+                                  <div className="mt-1 text-lg font-semibold text-slate-950">
+                                    {holding.fund.ticker} <span className="font-normal text-slate-700">{holding.fund.name}</span>
+                                  </div>
+                                  <div className="mt-1 text-sm text-slate-600">Matched role: {holding.matchedRole}</div>
+                                </div>
+                                <div className="rounded-full bg-slate-900 px-3 py-1 text-sm font-semibold text-white">
+                                  {holding.allocation}%
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1">Expense {formatPercent(holding.fund.netExpenseRatio)}</span>
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1">Adjusted {formatScore(holding.fund.adjustedScore)}</span>
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1">Role % {formatScore(holding.fund.baseRolePercentile)}</span>
+                              </div>
+                              <div className="mt-3 text-sm text-slate-600">
+                                {holding.fund.reasons.length > 0 ? holding.fund.reasons.join(" • ") : "No additional ranking reasons"}
+                              </div>
+                              {holding.warning && (
+                                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                  {holding.warning}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                          <div className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
-                            {selection.allocation}%
-                          </div>
-                        </div>
-                        <div className="mt-3 space-y-1 text-sm text-slate-600">
-                          {selection.explanation.map((item) => (
-                            <div key={item}>• {item}</div>
                           ))}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
 
-                <div className="glass-panel rounded-[28px] p-5">
-                  <div className="section-title">Tradeoffs And Risks</div>
-                  <div className="mt-4 space-y-2 text-sm text-slate-600">
-                    {selectedPortfolio.tradeoffs.map((tradeoff) => (
-                      <div key={tradeoff}>• {tradeoff}</div>
-                    ))}
-                    <div>• This tool is for portfolio construction research and comparison, not personalized investment advice.</div>
+                      <div className="glass-panel rounded-[30px] p-5">
+                        <div className="section-title">Portfolio Metrics</div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          <div className="metric-card">
+                            <div className="metric-label">Weighted expense ratio</div>
+                            <div className="metric-value">{formatPercent(activePortfolio.metrics.weightedExpenseRatio)}</div>
+                          </div>
+                          <div className="metric-card">
+                            <div className="metric-label">Weighted return score</div>
+                            <div className="metric-value">{formatScore(activePortfolio.metrics.weightedReturnScore)}</div>
+                          </div>
+                          <div className="metric-card">
+                            <div className="metric-label">Cost score</div>
+                            <div className="metric-value">{formatScore(activePortfolio.metrics.costScore)}</div>
+                          </div>
+                          <div className="metric-card">
+                            <div className="metric-label">Risk-adjusted score</div>
+                            <div className="metric-value">{formatScore(activePortfolio.metrics.riskAdjustedScore)}</div>
+                          </div>
+                          <div className="metric-card">
+                            <div className="metric-label">Volatility score</div>
+                            <div className="metric-value">{formatScore(activePortfolio.metrics.volatilityScore)}</div>
+                          </div>
+                          <div className="metric-card">
+                            <div className="metric-label">Overall portfolio score</div>
+                            <div className="metric-value">{formatScore(activePortfolio.metrics.portfolioScore)}</div>
+                          </div>
+                        </div>
+                        {activePortfolio.warnings.length > 0 && (
+                          <div className="mt-4 rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            {activePortfolio.warnings.map((warning) => (
+                              <div key={warning}>{warning}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      <div className="glass-panel rounded-[30px] p-5">
+                        <div className="section-title">Allocation By Fund</div>
+                        <div className="mt-4 h-72 rounded-[24px] bg-white/72 p-2">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie data={fundChartData} dataKey="allocation" nameKey="ticker" innerRadius={62} outerRadius={104} paddingAngle={2}>
+                                {fundChartData.map((entry) => (
+                                  <Cell key={entry.ticker} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <Tooltip formatter={(value: number) => `${value}%`} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      <div className="glass-panel rounded-[30px] p-5">
+                        <div className="section-title">Allocation By Role</div>
+                        <div className="mt-4 h-72 rounded-[24px] bg-white/72 p-2">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={roleChartData}>
+                              <XAxis dataKey="role" angle={-18} textAnchor="end" height={80} fontSize={11} />
+                              <YAxis unit="%" fontSize={11} />
+                              <Tooltip formatter={(value: number) => `${value}%`} />
+                              <Bar dataKey="allocation" radius={[10, 10, 0, 0]}>
+                                {roleChartData.map((entry) => (
+                                  <Cell key={entry.role} fill={entry.color} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      <div className="glass-panel rounded-[30px] p-5">
+                        <div className="section-title">Component Score Bars</div>
+                        <div className="mt-4 h-72 rounded-[24px] bg-white/72 p-2">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={activePortfolio.componentScoreBars}>
+                              <XAxis dataKey="label" fontSize={11} />
+                              <YAxis domain={[0, 100]} fontSize={11} />
+                              <Tooltip formatter={(value: number) => formatScore(value)} />
+                              <Bar dataKey="value" radius={[10, 10, 0, 0]} fill="#0f766e" />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
               </>
             )}
-          </aside>
+          </section>
         </div>
       </div>
     </main>
