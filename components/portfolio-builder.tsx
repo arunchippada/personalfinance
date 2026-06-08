@@ -61,8 +61,15 @@ const DEFAULT_CONTROLS = {
   maxExpenseRatio: "",
   etfBonus: 0,
   noTransactionFeeBonus: 3,
-  baseRank: "role_percentile" as BaseRankField
+  noLoadBonus: 1.5,
+  lowExpenseExtraWeight: 2,
+  baseRank: "global_score" as BaseRankField
 };
+
+type RankingControls = Pick<
+  typeof DEFAULT_CONTROLS,
+  "baseRank" | "etfBonus" | "noTransactionFeeBonus" | "noLoadBonus" | "lowExpenseExtraWeight"
+>;
 
 function formatPercent(value: number | null | undefined, digits = 2) {
   return value === null || value === undefined ? "N/A" : `${value.toFixed(digits)}%`;
@@ -98,8 +105,8 @@ function toRequest(controls: typeof DEFAULT_CONTROLS): TopByRoleRequest {
       baseRank: controls.baseRank,
       etfBonus: controls.etfBonus,
       noTransactionFeeBonus: controls.noTransactionFeeBonus,
-      noLoadBonus: 1.5,
-      lowExpenseExtraWeight: 2
+      noLoadBonus: controls.noLoadBonus,
+      lowExpenseExtraWeight: controls.lowExpenseExtraWeight
     }
   };
 }
@@ -160,6 +167,38 @@ function sortFunds(funds: RankedFund[], sortKey: SortKey, direction: "asc" | "de
   });
 }
 
+function getMaxAdjustedScore(funds: RankedFund[]) {
+  if (funds.length === 0) return null;
+  return funds.reduce((max, fund) => Math.max(max, fund.adjustedScore), -Infinity);
+}
+
+function getBaseRankLabel(baseRank: BaseRankField) {
+  if (baseRank === "global_percentile") return "Global %";
+  if (baseRank === "global_score") return "Global score";
+  return "Role %";
+}
+
+function getAdjustedScoreTooltip(fund: RankedFund, rankingControls: RankingControls) {
+  const parts = [`${getBaseRankLabel(rankingControls.baseRank)} ${formatScore(fund.baseRankValue)}`];
+  const etfContribution = fund.isEtf ? rankingControls.etfBonus : 0;
+  const ntfContribution = fund.ntf ? rankingControls.noTransactionFeeBonus : 0;
+  const noLoadContribution = fund.load === false ? rankingControls.noLoadBonus : 0;
+  parts.push(`ETF +${formatScore(etfContribution)}`);
+  parts.push(`NTF +${formatScore(ntfContribution)}`);
+  parts.push(`No-load +${formatScore(noLoadContribution)}`);
+
+  const expensePenalty = (fund.netExpenseRatio ?? 0) * rankingControls.lowExpenseExtraWeight;
+  parts.push(
+    `Expense -${formatScore(expensePenalty)} (${formatPercent(
+      fund.netExpenseRatio,
+      2
+    )} x ${formatScore(rankingControls.lowExpenseExtraWeight)})`
+  );
+
+  parts.push(`Adjusted ${formatScore(fund.adjustedScore)}`);
+  return parts.join(" | ");
+}
+
 function SortButton({
   label,
   sortKey,
@@ -193,12 +232,14 @@ function RoleTable({
   roleResult,
   sortKey,
   direction,
-  onSortChange
+  onSortChange,
+  rankingControls
 }: {
   roleResult: TopFundsByRoleResult;
   sortKey: SortKey;
   direction: "asc" | "desc";
   onSortChange: (key: SortKey) => void;
+  rankingControls: RankingControls;
 }) {
   const sortedFunds = useMemo(
     () => sortFunds(roleResult.funds, sortKey, direction),
@@ -220,9 +261,11 @@ function RoleTable({
         </div>
       </div>
 
-      <div className="mt-4 overflow-x-auto">
+      <div
+        className={`mt-4 overflow-auto ${sortedFunds.length > 5 ? "max-h-[26rem]" : ""}`}
+      >
         <table className="min-w-[1400px] text-sm">
-          <thead>
+          <thead className="sticky top-0 bg-white/95 backdrop-blur-sm">
             <tr className="border-b border-slate-200 text-left">
               <th className="pb-3 pr-4"><SortButton label="Rank" sortKey="rank" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Ticker" sortKey="ticker" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
@@ -253,7 +296,12 @@ function RoleTable({
                 <td className="py-3 pr-4 min-w-[280px] text-slate-700">{fund.name}</td>
                 <td className="py-3 pr-4">{formatScore(fund.baseRolePercentile)}</td>
                 <td className="py-3 pr-4">{formatScore(fund.globalPercentile)}</td>
-                <td className="py-3 pr-4 font-semibold text-slate-900">{formatScore(fund.adjustedScore)}</td>
+                <td
+                  className="py-3 pr-4 font-semibold text-slate-900"
+                  title={getAdjustedScoreTooltip(fund, rankingControls)}
+                >
+                  {formatScore(fund.adjustedScore)}
+                </td>
                 <td className="py-3 pr-4">{formatPercent(fund.netExpenseRatio)}</td>
                 <td className="py-3 pr-4">{formatPercent(fund.returns["3Y"])}</td>
                 <td className="py-3 pr-4">{formatPercent(fund.returns["5Y"])}</td>
@@ -386,9 +434,24 @@ export function PortfolioBuilder() {
     }
   }, [data, selectedPortfolioKey]);
 
-  const activeRole = data?.roles.find((role) => role.role === selectedRole) ?? data?.roles[0] ?? null;
   const activePortfolio =
     data?.portfolios.find((portfolio) => portfolio.key === selectedPortfolioKey) ?? data?.portfolios[0] ?? null;
+  const sortedRoles = useMemo(() => {
+    if (!data) return [];
+
+    return [...data.roles].sort((left, right) => {
+      const leftMax = getMaxAdjustedScore(left.funds) ?? -Infinity;
+      const rightMax = getMaxAdjustedScore(right.funds) ?? -Infinity;
+
+      if (rightMax !== leftMax) {
+        return rightMax - leftMax;
+      }
+
+      return left.role.localeCompare(right.role);
+    });
+  }, [data]);
+  const resolvedActiveRole =
+    sortedRoles.find((role) => role.role === selectedRole) ?? sortedRoles[0] ?? null;
 
   const roleChartData =
     activePortfolio?.allocationByRole.map((item, index) => ({
@@ -421,20 +484,20 @@ export function PortfolioBuilder() {
     setSortDirection(key === "name" || key === "ticker" ? "asc" : "desc");
   }
 
+  const rankingControls: RankingControls = {
+    baseRank: controls.baseRank,
+    etfBonus: controls.etfBonus,
+    noTransactionFeeBonus: controls.noTransactionFeeBonus,
+    noLoadBonus: controls.noLoadBonus,
+    lowExpenseExtraWeight: controls.lowExpenseExtraWeight
+  };
+
   return (
     <main className="min-h-screen px-4 py-6 md:px-6 lg:px-8">
       <div className="mx-auto max-w-[1720px]">
-        <section className="hero-panel rounded-[36px] p-6 md:p-8">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-            <div>
-              <div className="section-title text-emerald-800">Fund Portfolio Builder</div>
-              <h1 className="mt-2 max-w-4xl text-4xl font-semibold leading-tight text-slate-950 md:text-5xl">
-                Top funds by role, plus deterministic 5-fund, 7-fund, and 9-fund model portfolios.
-              </h1>
-              <p className="mt-3 max-w-3xl text-sm text-slate-700 md:text-base">
-                Rankings come from your local enriched CSV. The app applies simple runtime filters and bonuses, then builds fixed-template portfolios with fully inspectable logic.
-              </p>
-            </div>
+        <section className="hero-panel rounded-[36px] p-4 md:p-5">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="section-title text-emerald-800">Fund Portfolio Builder</div>
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="summary-card">
                 <div className="summary-label">Universe</div>
@@ -446,7 +509,7 @@ export function PortfolioBuilder() {
               </div>
               <div className="summary-card">
                 <div className="summary-label">CSV</div>
-                <div className="truncate text-sm font-medium text-slate-700">
+                <div className="truncate text-sm font-medium text-slate-700" title={data?.summary.dataFile ?? "Loading"}>
                   {data ? data.summary.dataFile.split("/").slice(-2).join("/") : "Loading"}
                 </div>
               </div>
@@ -520,13 +583,34 @@ export function PortfolioBuilder() {
               </label>
 
               <label className="block">
+                <div className="mb-2 text-sm font-medium text-slate-800">No-load bonus</div>
+                <input
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  step={0.5}
+                  type="number"
+                  value={controls.noLoadBonus}
+                  onChange={(event) => updateControl("noLoadBonus", Number(event.target.value))}
+                />
+              </label>
+
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-slate-800">Expense penalty weight</div>
+                <input
+                  className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
+                  step={0.25}
+                  type="number"
+                  value={controls.lowExpenseExtraWeight}
+                  onChange={(event) => updateControl("lowExpenseExtraWeight", Number(event.target.value))}
+                />
+              </label>
+
+              <label className="block">
                 <div className="mb-2 text-sm font-medium text-slate-800">Base ranking</div>
                 <select
                   className="w-full rounded-2xl border border-slate-200 bg-white/80 px-3 py-2"
                   value={controls.baseRank}
                   onChange={(event) => updateControl("baseRank", event.target.value as BaseRankField)}
                 >
-                  <option value="role_percentile">Role percentile</option>
                   <option value="global_percentile">Global percentile</option>
                   <option value="global_score">Global score</option>
                 </select>
@@ -539,23 +623,6 @@ export function PortfolioBuilder() {
                 Adjusted score = selected base rank + ETF bonus + NTF bonus + no-load bonus - expense penalty.
               </p>
             </div>
-
-            {data && (
-              <div className="mt-6 rounded-[24px] bg-white/70 p-4">
-                <div className="font-semibold text-slate-900">Fund classes in universe</div>
-                <div className="mt-3 space-y-2 text-sm text-slate-600">
-                  {Object.entries(data.summary.countsByFundClass)
-                    .sort((a, b) => b[1] - a[1])
-                    .slice(0, 8)
-                    .map(([role, count]) => (
-                      <div key={role} className="flex items-center justify-between gap-3">
-                        <span className="truncate">{role}</span>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{count}</span>
-                      </div>
-                    ))}
-                </div>
-              </div>
-            )}
           </aside>
 
           <section className="space-y-6">
@@ -585,11 +652,11 @@ export function PortfolioBuilder() {
                 <div className="rounded-[30px] border border-slate-200 bg-white/84 p-5">
                   <div className="section-title">Roles</div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {data.roles.map((roleResult, index) => (
+                    {sortedRoles.map((roleResult, index) => (
                       <button
                         key={roleResult.role}
                         className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
-                          roleResult.role === activeRole?.role
+                          roleResult.role === resolvedActiveRole?.role
                             ? "border-slate-900 bg-slate-900 text-white"
                             : "border-slate-200 bg-white text-slate-700"
                         }`}
@@ -600,17 +667,18 @@ export function PortfolioBuilder() {
                           className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle"
                           style={{ backgroundColor: getRoleColor(index) }}
                         />
-                        {roleResult.role}
+                        {roleResult.role} ({roleResult.totalEligibleInRole}, {formatScore(getMaxAdjustedScore(roleResult.funds))})
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {activeRole && (
+                {resolvedActiveRole && (
                   <RoleTable
                     direction={sortDirection}
                     onSortChange={handleSortChange}
-                    roleResult={activeRole}
+                    rankingControls={rankingControls}
+                    roleResult={resolvedActiveRole}
                     sortKey={sortKey}
                   />
                 )}

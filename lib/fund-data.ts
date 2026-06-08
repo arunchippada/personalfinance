@@ -33,7 +33,7 @@ const DEFAULT_REQUEST: Required<Pick<TopByRoleRequest, "limitPerRole">> & {
     excludeLoadFunds: false
   },
   rankingOptions: {
-    baseRank: "role_percentile",
+    baseRank: "global_score",
     etfBonus: 0,
     noTransactionFeeBonus: 3,
     noLoadBonus: 1.5,
