@@ -17,7 +17,7 @@ import type {
 const DEFAULT_CSV_PATH = path.join(
   process.cwd(),
   "data",
-  "2026-05-10",
+  "2026-06-28",
   "fidelity_funds_data_enriched.csv"
 );
 
@@ -167,6 +167,14 @@ function parseBooleanFlag(value?: string): boolean | undefined {
   return undefined;
 }
 
+function parseNtfFlag(value?: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") return true;
+  if (normalized === "n/a" || normalized === "na") return true;
+  return parseBooleanFlag(value);
+}
+
 function detectTicker(row: RawCsvRow, index: number) {
   const ticker = (row.Ticker ?? row.ticker ?? "").trim();
   return ticker || `FUND-${index + 1}`;
@@ -194,7 +202,7 @@ function normalizeFund(row: RawCsvRow, index: number): Fund {
     tenYearRank: parseNumeric(row["10-year Rank"]),
     isEtf,
     fundType: isEtf ? "ETF" : "Mutual Fund",
-    ntf: parseBooleanFlag(row.NTF),
+    ntf: parseNtfFlag(row.NTF),
     load: parseBooleanFlag(row["Load (Y/N)"]),
     netExpenseRatio: parseNumeric(row["Expense Ratio - Net"]),
     returns: {
