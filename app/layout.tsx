@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Fidelity Portfolio Builder",
-  description: "Local-only deterministic portfolio construction app for Fidelity funds data."
+  title: "FundWise — Fund research UX",
+  description: "Explore, compare and improve your fund portfolio."
 };
 
 export default function RootLayout({

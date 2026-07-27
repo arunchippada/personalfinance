@@ -2,6 +2,8 @@
 
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   Cell,
@@ -23,6 +25,7 @@ import type {
 } from "@/lib/types";
 
 type FundTypeMode = "both" | FundType;
+type AppView = "recommendations" | "compare" | "portfolio";
 type SortKey =
   | "rank"
   | "ticker"
@@ -233,13 +236,19 @@ function RoleTable({
   sortKey,
   direction,
   onSortChange,
-  rankingControls
+  rankingControls,
+  selectedFundIds,
+  onToggleCompare,
+  onQuickView
 }: {
   roleResult: TopFundsByRoleResult;
   sortKey: SortKey;
   direction: "asc" | "desc";
   onSortChange: (key: SortKey) => void;
   rankingControls: RankingControls;
+  selectedFundIds: string[];
+  onToggleCompare: (fund: RankedFund) => void;
+  onQuickView: (fund: RankedFund) => void;
 }) {
   const sortedFunds = useMemo(
     () => sortFunds(roleResult.funds, sortKey, direction),
@@ -264,9 +273,10 @@ function RoleTable({
       <div
         className={`mt-4 overflow-auto ${sortedFunds.length > 5 ? "max-h-[26rem]" : ""}`}
       >
-        <table className="min-w-[1400px] text-sm">
+        <table className="min-w-[1520px] text-sm">
           <thead className="sticky top-0 bg-white/95 backdrop-blur-sm">
             <tr className="border-b border-slate-200 text-left">
+              <th className="pb-3 pr-4 text-xs uppercase tracking-[0.12em] text-slate-500">Compare</th>
               <th className="pb-3 pr-4"><SortButton label="Rank" sortKey="rank" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Ticker" sortKey="ticker" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Name" sortKey="name" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
@@ -286,11 +296,21 @@ function RoleTable({
               <th className="pb-3 pr-4"><SortButton label="Risk Adj" sortKey="riskAdjustedScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Volatility" sortKey="volatilityScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3">Why It Ranks</th>
+              <th className="pb-3 pl-4">Details</th>
             </tr>
           </thead>
           <tbody>
             {sortedFunds.map((fund) => (
               <tr key={fund.id} className="border-b border-slate-100 align-top last:border-b-0">
+                <td className="py-3 pr-4">
+                  <input
+                    aria-label={`Compare ${fund.ticker}`}
+                    checked={selectedFundIds.includes(fund.id)}
+                    className="h-4 w-4 accent-[#176B5B]"
+                    onChange={() => onToggleCompare(fund)}
+                    type="checkbox"
+                  />
+                </td>
                 <td className="py-3 pr-4 font-semibold text-slate-900">{fund.rank}</td>
                 <td className="py-3 pr-4 font-semibold text-slate-900">{fund.ticker}</td>
                 <td className="py-3 pr-4 min-w-[280px] text-slate-700">{fund.name}</td>
@@ -316,6 +336,15 @@ function RoleTable({
                 <td className="py-3 pr-4">{formatScore(fund.volatilityScore)}</td>
                 <td className="py-3 min-w-[260px] text-slate-600">
                   {fund.reasons.length > 0 ? fund.reasons.join(" • ") : "No notable flags"}
+                </td>
+                <td className="py-3 pl-4">
+                  <button
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold hover:border-[#176B5B] hover:text-[#176B5B]"
+                    onClick={() => onQuickView(fund)}
+                    type="button"
+                  >
+                    Quick view
+                  </button>
                 </td>
               </tr>
             ))}
@@ -370,6 +399,7 @@ function PortfolioCard({
 }
 
 export function PortfolioBuilder() {
+  const [appView, setAppView] = useState<AppView>("recommendations");
   const [controls, setControls] = useState(DEFAULT_CONTROLS);
   const deferredControls = useDeferredValue(controls);
   const [data, setData] = useState<TopByRoleResponse | null>(null);
@@ -379,6 +409,9 @@ export function PortfolioBuilder() {
   const [selectedPortfolioKey, setSelectedPortfolioKey] = useState<Portfolio["key"]>("5-fund");
   const [sortKey, setSortKey] = useState<SortKey>("adjustedScore");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [quickViewFund, setQuickViewFund] = useState<RankedFund | null>(null);
+  const [compareFunds, setCompareFunds] = useState<RankedFund[]>([]);
+  const [portfolioOverrides, setPortfolioOverrides] = useState<Record<string, Record<string, string>>>({});
 
   const requestBody = useMemo(() => toRequest(deferredControls), [deferredControls]);
 
@@ -452,6 +485,20 @@ export function PortfolioBuilder() {
   }, [data]);
   const resolvedActiveRole =
     sortedRoles.find((role) => role.role === selectedRole) ?? sortedRoles[0] ?? null;
+  const allRankedFunds = useMemo(() => {
+    const byId = new Map<string, RankedFund>();
+    data?.roles.forEach((role) => role.funds.forEach((fund) => byId.set(fund.id, fund)));
+    return [...byId.values()];
+  }, [data]);
+  const displayedHoldings = useMemo(() => {
+    if (!activePortfolio) return [];
+    const overrides = portfolioOverrides[activePortfolio.key] ?? {};
+    return activePortfolio.holdings.map((holding) => {
+      const replacementId = overrides[holding.requestedRole];
+      const replacement = allRankedFunds.find((fund) => fund.id === replacementId);
+      return replacement ? { ...holding, fund: replacement, matchedRole: replacement.fundClassUse ?? replacement.fundClass } : holding;
+    });
+  }, [activePortfolio, allRankedFunds, portfolioOverrides]);
 
   const roleChartData =
     activePortfolio?.allocationByRole.map((item, index) => ({
@@ -484,6 +531,25 @@ export function PortfolioBuilder() {
     setSortDirection(key === "name" || key === "ticker" ? "asc" : "desc");
   }
 
+  function toggleCompare(fund: RankedFund) {
+    setCompareFunds((current) =>
+      current.some((item) => item.id === fund.id)
+        ? current.filter((item) => item.id !== fund.id)
+        : [...current, fund].slice(-5)
+    );
+  }
+
+  function replaceHolding(requestedRole: string, fundId: string) {
+    if (!activePortfolio) return;
+    setPortfolioOverrides((current) => ({
+      ...current,
+      [activePortfolio.key]: {
+        ...(current[activePortfolio.key] ?? {}),
+        [requestedRole]: fundId
+      }
+    }));
+  }
+
   const rankingControls: RankingControls = {
     baseRank: controls.baseRank,
     etfBonus: controls.etfBonus,
@@ -493,8 +559,83 @@ export function PortfolioBuilder() {
   };
 
   return (
-    <main className="min-h-screen px-4 py-6 md:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1720px]">
+    <main className="min-h-screen bg-[#F6F7F9] text-[#172033]">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1720px] items-center justify-between px-4 py-4 md:px-6 lg:px-8">
+          <button className="flex items-center gap-3 text-left" onClick={() => setAppView("recommendations")} type="button">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#176B5B] text-lg font-bold text-white">F</span>
+            <span><b className="block text-[15px]">FundWise</b><span className="text-xs text-slate-500">Invest with context</span></span>
+          </button>
+          <nav className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+            {([
+              ["recommendations", "Recommendations"],
+              ["compare", `Compare${compareFunds.length ? ` (${compareFunds.length})` : ""}`],
+              ["portfolio", "My Portfolio"]
+            ] as [AppView, string][]).map(([key, label]) => (
+              <button
+                className={`rounded-lg px-3 py-2 text-sm font-semibold transition md:px-4 ${appView === key ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"}`}
+                key={key}
+                onClick={() => { setAppView(key); setQuickViewFund(null); }}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      {appView === "compare" && (
+        <section className="mx-auto max-w-[1440px] px-4 py-8 md:px-6 lg:px-8">
+          <div className="section-title text-[#176B5B]">Compare Funds</div>
+          <h1 className="mt-2 text-3xl font-semibold">Compare quality, cost and performance.</h1>
+          <p className="mt-2 text-sm text-slate-500">Select funds from rankings or portfolio holdings. Up to five can be compared.</p>
+          {compareFunds.length < 2 ? (
+            <div className="mt-8 rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center">
+              <p className="font-semibold">Select at least two funds to compare.</p>
+              <button className="mt-4 rounded-xl bg-[#176B5B] px-4 py-3 text-sm font-semibold text-white" onClick={() => setAppView("recommendations")} type="button">Browse recommendations</button>
+            </div>
+          ) : (
+            <div className="mt-8 overflow-x-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <table className="w-full min-w-[780px] text-left text-sm">
+                <thead><tr className="border-b border-slate-200"><th className="pb-4 text-slate-500">Metric</th>{compareFunds.map((fund) => <th className="pb-4" key={fund.id}><b>{fund.ticker}</b><p className="mt-1 max-w-[190px] text-xs font-normal text-slate-500">{fund.name}</p></th>)}</tr></thead>
+                <tbody>
+                  {[
+                    ["Class", (fund: RankedFund) => fund.fundClassUse ?? fund.fundClass],
+                    ["Adjusted score", (fund: RankedFund) => formatScore(fund.adjustedScore)],
+                    ["Expense ratio", (fund: RankedFund) => formatPercent(fund.netExpenseRatio)],
+                    ["3Y return", (fund: RankedFund) => formatPercent(fund.returns["3Y"])],
+                    ["5Y return", (fund: RankedFund) => formatPercent(fund.returns["5Y"])],
+                    ["10Y return", (fund: RankedFund) => formatPercent(fund.returns["10Y"])],
+                    ["Risk-adjusted score", (fund: RankedFund) => formatScore(fund.riskAdjustedScore)]
+                  ].map(([label, getter]) => (
+                    <tr className="border-b border-slate-100 last:border-0" key={label as string}>
+                      <td className="py-4 font-medium text-slate-500">{label as string}</td>
+                      {compareFunds.map((fund) => <td className="py-4 font-semibold" key={fund.id}>{(getter as (fund: RankedFund) => string)(fund)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-5 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Holdings-overlap data will appear here when the holdings feed is connected.</div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {appView === "portfolio" && (
+        <section className="mx-auto max-w-[1440px] px-4 py-8 md:px-6 lg:px-8">
+          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+            <div><div className="section-title text-[#176B5B]">My Portfolio</div><h1 className="mt-2 text-3xl font-semibold">Your holdings and next best actions.</h1><p className="mt-2 text-sm text-slate-500">Add dollar amounts or percentages to receive allocation guidance.</p></div>
+            <button className="rounded-xl bg-[#176B5B] px-4 py-3 text-sm font-semibold text-white" type="button">+ Add holding</button>
+          </div>
+          <div className="mt-8 grid gap-5 lg:grid-cols-[.9fr_1.3fr]">
+            <div className="rounded-3xl border border-slate-200 bg-white p-6"><h2 className="font-semibold">Current allocation</h2><div className="mt-12 text-center text-sm text-slate-500">Add your funds and amounts to see allocation.</div></div>
+            <div className="rounded-3xl border border-slate-200 bg-white p-6"><div className="section-title">Recommended Actions</div><h2 className="mt-2 text-xl font-semibold">Recommendations will appear here</h2><p className="mt-3 text-sm leading-6 text-slate-500">FundWise will review concentration, overlap, costs and target allocation before suggesting buy, sell, hold or rebalance actions.</p></div>
+          </div>
+        </section>
+      )}
+
+      {appView === "recommendations" && <div className="mx-auto max-w-[1720px] px-4 py-6 md:px-6 lg:px-8">
         <section className="hero-panel rounded-[36px] p-4 md:p-5">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="section-title text-emerald-800">Fund Portfolio Builder</div>
@@ -677,8 +818,11 @@ export function PortfolioBuilder() {
                   <RoleTable
                     direction={sortDirection}
                     onSortChange={handleSortChange}
+                    onQuickView={setQuickViewFund}
+                    onToggleCompare={toggleCompare}
                     rankingControls={rankingControls}
                     roleResult={resolvedActiveRole}
+                    selectedFundIds={compareFunds.map((fund) => fund.id)}
                     sortKey={sortKey}
                   />
                 )}
@@ -703,7 +847,7 @@ export function PortfolioBuilder() {
                       <div className="glass-panel rounded-[30px] p-5">
                         <div className="section-title">Portfolio Holdings</div>
                         <div className="mt-4 space-y-3">
-                          {activePortfolio.holdings.map((holding) => (
+                          {displayedHoldings.map((holding) => (
                             <div key={`${activePortfolio.key}-${holding.requestedRole}-${holding.fund.id}`} className="rounded-[24px] bg-white/75 p-4">
                               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                                 <div>
@@ -724,6 +868,26 @@ export function PortfolioBuilder() {
                               </div>
                               <div className="mt-3 text-sm text-slate-600">
                                 {holding.fund.reasons.length > 0 ? holding.fund.reasons.join(" • ") : "No additional ranking reasons"}
+                              </div>
+                              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <label className="flex-1">
+                                  <span className="sr-only">Replace {holding.fund.ticker}</span>
+                                  <select
+                                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold"
+                                    onChange={(event) => replaceHolding(holding.requestedRole, event.target.value)}
+                                    value={holding.fund.id}
+                                  >
+                                    {(
+                                      sortedRoles.find((role) => role.role === holding.matchedRole)?.funds ??
+                                      sortedRoles.find((role) => role.role === holding.requestedRole)?.funds ??
+                                      allRankedFunds
+                                    ).map((fund) => <option key={fund.id} value={fund.id}>{fund.ticker} — {fund.name}</option>)}
+                                  </select>
+                                </label>
+                                <button className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold" onClick={() => toggleCompare(holding.fund)} type="button">
+                                  {compareFunds.some((fund) => fund.id === holding.fund.id) ? "Compared ✓" : "Compare"}
+                                </button>
+                                <button className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold" onClick={() => setQuickViewFund(holding.fund)} type="button">Quick view</button>
                               </div>
                               {holding.warning && (
                                 <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -828,7 +992,34 @@ export function PortfolioBuilder() {
             )}
           </section>
         </div>
-      </div>
+      </div>}
+
+      {appView === "recommendations" && compareFunds.length >= 2 && (
+        <div className="fixed bottom-5 left-1/2 z-20 flex w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 items-center justify-between rounded-2xl bg-[#172033] px-4 py-3 text-white shadow-2xl">
+          <div><b className="text-sm">{compareFunds.length} funds selected</b><p className="text-xs text-slate-300">{compareFunds.map((fund) => fund.ticker).join(" · ")}</p></div>
+          <button className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-900" onClick={() => setAppView("compare")} type="button">Compare funds →</button>
+        </div>
+      )}
+
+      {quickViewFund && (
+        <div className="fixed inset-0 z-40 bg-slate-950/30" onClick={() => setQuickViewFund(null)}>
+          <aside className="ml-auto h-full w-full max-w-[580px] overflow-y-auto bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div><span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-[#176B5B]">{quickViewFund.fundClassUse ?? quickViewFund.fundClass}</span><h2 className="mt-3 text-2xl font-semibold">{quickViewFund.ticker}</h2><p className="text-sm text-slate-500">{quickViewFund.name}</p></div>
+              <button aria-label="Close" className="grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-xl" onClick={() => setQuickViewFund(null)} type="button">×</button>
+            </div>
+            <div className="mt-6 grid grid-cols-3 gap-3">
+              {[["Score", formatScore(quickViewFund.adjustedScore)], ["Expense", formatPercent(quickViewFund.netExpenseRatio)], ["5Y return", formatPercent(quickViewFund.returns["5Y"])]].map(([label, value]) => <div className="rounded-xl bg-slate-50 p-3" key={label}><p className="text-xs text-slate-500">{label}</p><b className="mt-1 block">{value}</b></div>)}
+            </div>
+            <div className="mt-7"><h3 className="font-semibold">Historical NAV</h3><p className="text-xs text-slate-500">Illustrative history · connect NAV feed for live values</p></div>
+            <div className="mt-4 h-64">
+              <ResponsiveContainer><AreaChart data={[{y:"2019",v:100},{y:"2020",v:112},{y:"2021",v:139},{y:"2022",v:121},{y:"2023",v:146},{y:"2024",v:169},{y:"Now",v:184}]}><XAxis dataKey="y" axisLine={false} tickLine={false} fontSize={11}/><YAxis hide/><Tooltip/><Area dataKey="v" fill="#D7EFE9" stroke="#176B5B" strokeWidth={3} type="monotone"/></AreaChart></ResponsiveContainer>
+            </div>
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><b className="text-emerald-900">Historical context: Neutral</b><p className="mt-2 text-sm leading-6 text-emerald-900/75">Use valuation, drawdown and your allocation—not NAV alone—to decide whether to buy.</p></div>
+            <div className="mt-5 grid grid-cols-2 gap-3"><button className="rounded-xl border border-slate-200 py-3 font-semibold" onClick={() => toggleCompare(quickViewFund)} type="button">{compareFunds.some((fund) => fund.id === quickViewFund.id) ? "Remove from compare" : "Add to compare"}</button><button className="rounded-xl bg-[#176B5B] py-3 font-semibold text-white" onClick={() => setAppView("portfolio")} type="button">Add to portfolio</button></div>
+          </aside>
+        </div>
+      )}
     </main>
   );
 }

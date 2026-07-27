@@ -17,7 +17,7 @@ import type {
 const DEFAULT_CSV_PATH = path.join(
   process.cwd(),
   "data",
-  "2026-06-28",
+  "2026-07-26",
   "fidelity_funds_data_enriched.csv"
 );
 
