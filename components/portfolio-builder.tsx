@@ -88,6 +88,25 @@ function formatFlag(value: boolean | undefined) {
   return "N/A";
 }
 
+function formatFundsDataSource(dataFile: string | undefined) {
+  if (!dataFile) return "Loading fund data";
+
+  const normalizedPath = dataFile.replace(/\\/g, "/");
+  const fileName = normalizedPath.split("/").pop() ?? "";
+  const dateMatch = normalizedPath.match(/(20\d{2})-(\d{2})-(\d{2})/);
+  const providerMatch = fileName.match(/(?:^|[_-])(fidelity|vanguard|schwab|morningstar)(?:[_-]|\.)/i);
+  const provider = providerMatch
+    ? providerMatch[1].charAt(0).toUpperCase() + providerMatch[1].slice(1).toLowerCase()
+    : "source file";
+  const updated = dateMatch
+    ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(
+        new Date(`${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}T00:00:00Z`)
+      )
+    : null;
+
+  return `Funds data from ${provider}${updated ? ` · Updated ${updated}` : ""}`;
+}
+
 function getRoleColor(index: number) {
   return ROLE_COLORS[index % ROLE_COLORS.length];
 }
@@ -259,8 +278,7 @@ function RoleTable({
     <div className="rounded-[28px] border border-slate-200/80 bg-white/80 p-4 shadow-[0_20px_40px_rgba(15,23,42,0.06)]">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="section-title">Top Funds By Role</div>
-          <h2 className="mt-1 text-2xl font-semibold text-slate-950">{roleResult.role}</h2>
+          <h2 className="text-2xl font-semibold text-slate-950">{roleResult.role}</h2>
           <p className="mt-2 text-sm text-slate-600">
             Showing {roleResult.funds.length} of {roleResult.totalEligibleInRole} eligible funds in this class.
           </p>
@@ -273,7 +291,7 @@ function RoleTable({
       <div
         className={`mt-4 overflow-auto ${sortedFunds.length > 5 ? "max-h-[26rem]" : ""}`}
       >
-        <table className="min-w-[1520px] text-sm">
+        <table className="min-w-[1440px] text-sm">
           <thead className="sticky top-0 bg-white/95 backdrop-blur-sm">
             <tr className="border-b border-slate-200 text-left">
               <th className="pb-3 pr-4 text-xs uppercase tracking-[0.12em] text-slate-500">Compare</th>
@@ -296,7 +314,6 @@ function RoleTable({
               <th className="pb-3 pr-4"><SortButton label="Risk Adj" sortKey="riskAdjustedScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Volatility" sortKey="volatilityScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3">Why It Ranks</th>
-              <th className="pb-3 pl-4">Details</th>
             </tr>
           </thead>
           <tbody>
@@ -312,7 +329,17 @@ function RoleTable({
                   />
                 </td>
                 <td className="py-3 pr-4 font-semibold text-slate-900">{fund.rank}</td>
-                <td className="py-3 pr-4 font-semibold text-slate-900">{fund.ticker}</td>
+                <td className="py-3 pr-4 font-semibold">
+                  <button
+                    aria-label={`Quick view ${fund.ticker}`}
+                    className="text-[#176B5B] underline decoration-[#176B5B]/30 underline-offset-4 transition hover:decoration-[#176B5B] focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#176B5B]"
+                    onClick={() => onQuickView(fund)}
+                    title={`Quick view ${fund.ticker}`}
+                    type="button"
+                  >
+                    {fund.ticker}
+                  </button>
+                </td>
                 <td className="py-3 pr-4 min-w-[280px] text-slate-700">{fund.name}</td>
                 <td className="py-3 pr-4">{formatScore(fund.baseRolePercentile)}</td>
                 <td className="py-3 pr-4">{formatScore(fund.globalPercentile)}</td>
@@ -336,15 +363,6 @@ function RoleTable({
                 <td className="py-3 pr-4">{formatScore(fund.volatilityScore)}</td>
                 <td className="py-3 min-w-[260px] text-slate-600">
                   {fund.reasons.length > 0 ? fund.reasons.join(" • ") : "No notable flags"}
-                </td>
-                <td className="py-3 pl-4">
-                  <button
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold hover:border-[#176B5B] hover:text-[#176B5B]"
-                    onClick={() => onQuickView(fund)}
-                    type="button"
-                  >
-                    Quick view
-                  </button>
                 </td>
               </tr>
             ))}
@@ -635,30 +653,27 @@ export function PortfolioBuilder() {
         </section>
       )}
 
-      {appView === "recommendations" && <div className="mx-auto max-w-[1720px] px-4 py-6 md:px-6 lg:px-8">
-        <section className="hero-panel rounded-[36px] p-4 md:p-5">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="section-title text-emerald-800">Fund Portfolio Builder</div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="summary-card">
-                <div className="summary-label">Universe</div>
-                <div className="summary-value">{data?.summary.totalFunds.toLocaleString() ?? "—"}</div>
-              </div>
-              <div className="summary-card">
-                <div className="summary-label">Eligible</div>
-                <div className="summary-value">{data?.summary.totalFilteredFunds.toLocaleString() ?? "—"}</div>
-              </div>
-              <div className="summary-card">
-                <div className="summary-label">CSV</div>
-                <div className="truncate text-sm font-medium text-slate-700" title={data?.summary.dataFile ?? "Loading"}>
-                  {data ? data.summary.dataFile.split("/").slice(-2).join("/") : "Loading"}
-                </div>
-              </div>
+      {appView === "recommendations" && <div className="mx-auto max-w-[1720px] px-4 py-5 md:px-6 lg:px-8">
+        <section className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <h1 className="text-sm font-semibold uppercase tracking-[0.1em] text-[#176B5B]">Fund Portfolio Builder</h1>
+            <div className="hidden h-4 w-px bg-slate-300 sm:block" aria-hidden="true" />
+            <div className="flex items-center gap-2" aria-label="Fund availability summary">
+              <span className="inline-flex items-baseline gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500 shadow-sm">
+                Universe <strong className="text-sm text-slate-900">{data?.summary.totalFunds.toLocaleString() ?? "—"}</strong>
+              </span>
+              <span className="inline-flex items-baseline gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700">
+                Eligible <strong className="text-sm text-emerald-950">{data?.summary.totalFilteredFunds.toLocaleString() ?? "—"}</strong>
+              </span>
             </div>
           </div>
+          <p className="flex shrink-0 items-center gap-2 text-xs text-slate-500" title={data?.summary.dataFile}>
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+            {formatFundsDataSource(data?.summary.dataFile)}
+          </p>
         </section>
 
-        <div className="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="mt-5 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
           <aside className="glass-panel h-fit rounded-[30px] p-5">
             <div className="section-title">Controls</div>
 
