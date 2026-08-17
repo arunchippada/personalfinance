@@ -32,6 +32,7 @@ type SortKey =
   | "name"
   | "rolePercentile"
   | "globalPercentile"
+  | "globalScore"
   | "adjustedScore"
   | "expenseRatio"
   | "return3Y"
@@ -145,6 +146,8 @@ function metricValue(fund: RankedFund, key: SortKey) {
       return fund.baseRolePercentile ?? -Infinity;
     case "globalPercentile":
       return fund.globalPercentile ?? -Infinity;
+    case "globalScore":
+      return fund.globalScore ?? -Infinity;
     case "adjustedScore":
       return fund.adjustedScore;
     case "expenseRatio":
@@ -291,7 +294,7 @@ function RoleTable({
       <div
         className={`mt-4 overflow-auto ${sortedFunds.length > 5 ? "max-h-[26rem]" : ""}`}
       >
-        <table className="min-w-[1440px] text-sm">
+        <table className="min-w-[1360px] text-sm">
           <thead className="sticky top-0 bg-white/95 backdrop-blur-sm">
             <tr className="border-b border-slate-200 text-left">
               <th className="pb-3 pr-4 text-xs uppercase tracking-[0.12em] text-slate-500">Compare</th>
@@ -300,6 +303,7 @@ function RoleTable({
               <th className="pb-3 pr-4"><SortButton label="Name" sortKey="name" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Role %" sortKey="rolePercentile" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Global %" sortKey="globalPercentile" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
+              <th className="pb-3 pr-4"><SortButton label="Global score" sortKey="globalScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Adjusted" sortKey="adjustedScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Expense" sortKey="expenseRatio" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="3Y" sortKey="return3Y" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
@@ -313,7 +317,6 @@ function RoleTable({
               <th className="pb-3 pr-4"><SortButton label="Return Score" sortKey="weightedReturnScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Risk Adj" sortKey="riskAdjustedScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
               <th className="pb-3 pr-4"><SortButton label="Volatility" sortKey="volatilityScore" activeKey={sortKey} direction={direction} onChange={onSortChange} /></th>
-              <th className="pb-3">Why It Ranks</th>
             </tr>
           </thead>
           <tbody>
@@ -343,6 +346,7 @@ function RoleTable({
                 <td className="py-3 pr-4 min-w-[280px] text-slate-700">{fund.name}</td>
                 <td className="py-3 pr-4">{formatScore(fund.baseRolePercentile)}</td>
                 <td className="py-3 pr-4">{formatScore(fund.globalPercentile)}</td>
+                <td className="py-3 pr-4">{formatScore(fund.globalScore)}</td>
                 <td
                   className="py-3 pr-4 font-semibold text-slate-900"
                   title={getAdjustedScoreTooltip(fund, rankingControls)}
@@ -361,9 +365,6 @@ function RoleTable({
                 <td className="py-3 pr-4">{formatScore(fund.weightedReturnScore)}</td>
                 <td className="py-3 pr-4">{formatScore(fund.riskAdjustedScore)}</td>
                 <td className="py-3 pr-4">{formatScore(fund.volatilityScore)}</td>
-                <td className="py-3 min-w-[260px] text-slate-600">
-                  {fund.reasons.length > 0 ? fund.reasons.join(" • ") : "No notable flags"}
-                </td>
               </tr>
             ))}
           </tbody>
